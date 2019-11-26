@@ -1,0 +1,117 @@
+---
+title: "Week 48 - Student loan payments"
+output: html_notebook
+---
+https://github.com/rfordatascience/tidytuesday/tree/master/data/2019/2019-11-26
+
+# Dependencies
+```{r}
+library(tidyverse)
+library(lubridate)
+library(cowplot)
+```
+
+
+# Get the data
+
+```{r}
+loans <- read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2019/2019-11-26/loans.csv")
+
+```
+
+## Initial inspection
+
+```{r}
+loans
+
+loans %>% filter(agency_name == "Van Ru Credit Corporation") 
+```
+
+Loans contains a tibble of loans with 291 observations and 10 variables.
+- Agency name is a chr
+- Year is a 2 digit dbl
+- Quater is a 2 digit dbl
+- Others are all double
+- Some information from added is missing. This is the total value added during the quarter. If no value was addied is this na?
+
+
+# Initial vis
+
+## Plot the total debt over time
+
+```{r}
+loans %>% 
+  mutate(yq  =paste0("20", year, "\nQ", quarter)) %>%
+  filter(year != 15) %>%
+  select(-year, -quarter) %>%
+  group_by(yq) %>%
+  pivot_longer(starting:total, names_to = "metric", values_to = "value") %>%
+  mutate(value = value/1e6) %>%
+  arrange(value) %>%
+  ggplot(aes(yq, value)) +
+  geom_point(aes(group = value), position=position_dodge(width=0.75), size = 0.5, alpha = 0.5) +
+  stat_summary(fun.y = median, fun.ymin = median, fun.ymax = median,
+                 geom = "crossbar", width = 0.5, size = 0.25) +
+  stat_summary(fun.y = quantile, fun.ymin = quantile, fun.ymax = quantile,
+                 geom = "crossbar", width = 0.25, size = 0.25, colour = "red",
+               fun.args = list(probs = c(0.25,0.75))) +
+  
+  #ylim(0,1.2e5) +
+  theme(legend.position = "none") +
+  theme_cowplot() +
+  ylab("Value\nUSD (millions)") +
+  facet_wrap(~metric, scales = "free_y") +
+  scale_x_discrete(breaks = c("2016\nQ1", "2018\nQ1", "2017\nQ1"))
+
+  
+```
+
+Plot the distribution of loan values
+```{r}
+
+loans %>% 
+  mutate(yq  =paste0("20", year, "\nQ", quarter)) %>%
+  filter(year != 15) %>%
+  pivot_longer(starting:total, names_to = "metric", values_to = "value") %>%
+  mutate(value = value/1e6) %>%
+  filter(year != 15) %>%
+  select(-year, -quarter) %>%
+  ggplot(aes(value)) +
+  geom_density() +
+  facet_grid(yq~metric, scales = "free")
+
+
+```
+
+
+
+
+
+
+# Look by quater grouo by year
+
+```{r}
+loans %>% 
+  mutate(yq  =paste(year, quarter, sep = ".")) %>%
+  ggplot(aes(quarter, total, colour = agency_name, group = agency_name)) + 
+  geom_line() + 
+  geom_point() +
+  theme(legend.position = "none") +
+  facet_wrap(~year)
+```
+
+
+# UMAP
+
+```{r}
+loans %>% select(-agency_name, year, quarter) %>% mutate_all(replace_na, 0) %>%
+  uwot::umap() %>%
+  as_tibble() %>%
+  rename(umap1 = V1, umap2 = V2) %>%
+  bind_cols(loans) %>%
+  ggplot(aes(umap1, umap2, colour = total)) +
+  geom_point(size = 0.05) +
+  coord_equal() +
+  theme_cowplot()
+```
+
