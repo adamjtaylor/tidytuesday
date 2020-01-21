@@ -1,0 +1,31 @@
+```{r}
+data <- data.frame(
+  x = 1:10,
+  y = runif(10),
+  begin = runif(10, 1, 100),
+  length = runif(10, 5, 20),
+  enter = runif(10, 5, 10),
+  exit = runif(10, 5, 10)
+)
+
+anim <- ggplot(data, aes(x, y)) +
+  geom_col() +
+  transition_events(start = begin,
+                    end = begin + length,
+                    enter_length = enter,
+                    exit_length = exit) +
+ enter_grow() +
+ exit_drift(x_mod = 11) +
+ exit_fade()
+
+anim
+```
+
+```{r}
+anim3 <- ggplot(mtcars, aes(factor(gear), mpg)) +
+  geom_boxplot() +
+  transition_manual(factor(gear, levels = c('4', '3', '5')))
+
+anim3
+```
+

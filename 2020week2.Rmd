@@ -1,0 +1,167 @@
+---
+title: "2020 Week 2 / 2020-01-07 / Australian fires"
+output: html_notebook
+---
+
+# Mapping fire data
+
+```{r}
+library(tidyverse)
+```
+
+# Data import
+
+```{r}
+rainfall <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-01-07/rainfall.csv')
+temperature <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-01-07/temperature.csv')
+
+```
+
+```{r}
+rainfall
+
+rainfall %>% mutate(date = lubridate::make_date(year, month, day)) %>%
+  select(date, city_name, rainfall) %>%
+  ggplot(aes(x = date, y = rainfall, colour = city_name)) +
+  geom_point() +
+  scale_x_date()
+
+monthly_rainfall <- rainfall %>% 
+  filter(quality == "Y") %>%
+  group_by(city_name, year, month, station_code, lat, long, station_name) %>%
+  summarise(rainfall = sum(rainfall))
+
+monthly_rainfall %>%
+  #mutate(date = lubridate::make_date(year, month)) %>%
+  #select(date, city_name, rainfall) %>%
+  ggplot(aes(x = year, y = rainfall, colour = month, group = month)) +
+  geom_line() +
+  facet_wrap(~city_name)
+  
+  
+  
+```
+# Join rainfall and temperature
+
+```{r}
+
+rain_and_temp <- temperature %>% mutate(city_name = str_to_title(city_name)) %>%
+  mutate(date = lubridate::ymd(date),
+         temp_type = paste0(temp_type, "_temp")) %>%
+  pivot_wider(names_from = "temp_type", values_from = "temperature") %>%
+  full_join(
+    rainfall %>% mutate(date = lubridate::make_date(year, month, day)),
+    by = c("city_name", "date")
+    )
+  
+  
+rain_and_temp %>% 
+  filter(!is.na(max_temp), !is.na(rainfall)) %>%
+  ggplot(aes(max_temp, rainfall)) + geom_point(shape = ".") +
+  facet_grid(city_name~month)
+
+rain_and_temp %>% distinct(temp_type)
+```
+
+
+```{r}
+rain_and_temp %>%
+  filter(!is.na(max_temp), !is.na(rainfall)) %>%
+  filter(quality == "Y") %>%
+  select(city_name, max_temp, rainfall, year, month) %>%
+  group_by(city_name, year, month) %>%
+  summarise_all(mean) %>%
+  ggplot(aes(year, max_temp, colour = month)) +
+  geom_line() +
+  facet_grid(city_name~month)
+           
+  
+```
+# Map fires
+```{r}
+nasa_fire <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-01-07/MODIS_C6_Australia_and_New_Zealand_7d.csv')
+
+```
+
+Basic map
+
+```{r}
+
+aus_map <- map_data("Australia")
+nasa_fire %>% 
+  ggplot(aes(latitude, longitude, colour = bright_t31)) + 
+  geom_point() + scale_colour_viridis_c() +
+  coord_equal()
+
+nasa_fire %>% distinct(acq_date, acq_time)
+```
+## Get ox map data
+
+```{r}
+#devtools::install_github("ropenscilabs/rnaturalearth")
+
+library("rnaturalearth")
+
+oz_shape <- rnaturalearth::ne_states(geounit = "australia")
+
+sp::plot(oz_shape)
+
+oz_shape_sf <- sf::st_as_sf(oz_shape)
+
+head(oz_shape_sf)
+```
+
+```{r}
+library(gganimate)
+nasa_fire_nsw <- nasa_fire %>% filter(longitude >= 148, longitude <= 155, latitude <= -30, latitude >= -40) %>% filter(daynight =="D") %>% mutate(date_chr = as.character(acq_date))
+# Prepare a map of NZ
+ozmap <- ggplot() +
+  geom_polygon(data = oz_shape, 
+               aes(x = long, y = lat, group = group),
+               fill = "black", 
+               colour = "grey50") +
+    geom_point(data = nasa_fire_nsw, 
+               aes(longitude, latitude, colour = brightness), 
+               shape = ".") + 
+  scale_colour_viridis_c(option = "magma") +
+  coord_equal(xlim = c(147,152), ylim = c(-38, -33)) +
+  theme_void() +
+  theme(plot.background = element_rect(fill = "grey80")) +
+  transition_manual(date_chr)
+
+# Plot it in cartesian coordinates
+ozmap
+
+nasa_fire %>% sample_n(3) %>% select(latitude,longitude,bright_t31, scan, track) %>%
+  mutate(scan_deg = scan/110,
+         track_deg = track/abs(111.320*cos(latitude*pi/180))) 
+
+ozmap <- ggplot() +
+  geom_polygon(data = oz_shape, 
+               aes(x = long, y = lat, group = group),
+               fill = "black", 
+               colour = "grey50") +
+    geom_point(data = nasa_fire_nsw, 
+               aes(longitude, latitude, colour = brightness), 
+               shape = ".") + 
+  scale_colour_viridis_c(option = "magma") +
+  coord_equal(xlim = c(147,152), ylim = c(-38, -33)) +
+  theme_void() +
+  theme(plot.background = element_rect(fill = "grey80")) +
+  transition_manual(date_chr)
+
+
+
+```
+
+```{r}
+library(ggmap)
+map_limits <- c(left = 147, bottom= -38, right = 152, top = -33)
+get_stamenmap(map_limits, maptype = "toner-lite", zoom = 7) %>% ggmap() +
+  geom_hex(data = nasa_fire_nsw, 
+               aes(longitude, latitude, colour = brightness),
+           bins = 100) + 
+  scale_fill_viridis_c(option = "magma") + coord_cartesian()
+  
+```
+    
