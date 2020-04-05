@@ -1,0 +1,251 @@
+---
+title: "#tidytuesday, 2020-03-31. Beer"
+output: html_notebook
+---
+
+# LPackages and data iport
+
+```{r}
+library(tidyverse)
+library(cowplot)
+library(ggrepel)
+install.packages("gghighlight")
+library(gghighlight)
+library(patchwork)
+library(broom)
+
+beer_states <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-03-31/beer_states.csv')
+
+```
+
+
+
+# Total production
+
+Perform a linear regression on on total priduction to find high and low growth rate states from the slope
+
+```{r}
+beer_states_total <- beer_states %>% 
+  #filter(year >= 2013) %>%
+  mutate(barrels = replace_na(barrels, 0)) %>%
+  group_by(state, year) %>%
+  summarise(barrels= sum(barrels)) %>%
+    filter(state != "total")
+
+
+beer_growth <- beer_states_total %>%
+  filter(state != "total") %>%
+  na.omit() %>%
+  group_by(state) %>%
+  mutate(barrels_norm = barrels/max(barrels)) %>%
+  group_nest(state) %>%
+  mutate(model = map(data, ~lm(barrels_norm~year, data = .x)),
+         tidy = map(model, tidy)) %>%
+  unnest(tidy) %>%
+  filter(term == "year") %>%
+  select(state, estimate) %>%
+  rename(slope = estimate)
+
+fast_growth_states <- beer_growth %>% top_n(5, slope) %>% pull(state)
+
+slow_growth_states <- beer_growth %>% top_n(-5, slope) %>% pull(state)
+
+high_prod_states <- beer_states_total %>% filter(year == 2018) %>%
+  filter(state != "total") %>%
+  ungroup() %>%
+  top_n(5, barrels) %>% 
+  pull(state)
+
+```
+
+
+Plot the total production
+
+```{r, fig.height=7, fig.width=7}
+
+
+
+
+p_high_prod <- beer_states_total %>%
+  ggplot(aes(year,barrels, group = state)) + 
+  geom_line(size = 1.5, colour = "#d95f02") +
+  facet_wrap(~state, ncol =5) + theme_cowplot() +
+  gghighlight(state %in% high_prod_states,
+              #use_direct_label = FALSE,
+              #keep_scales = TRUE,
+              label_params = list(direction = "x", xlim = c(2019,2919)),
+              unhighlighted_params = list(size = 0.5, alpha = 0.5)) +
+  theme_cowplot() +
+  scale_x_continuous(breaks = c(2008,2018), limits= c(2008,2025)) +
+  scale_y_log10(breaks = c(1e7, 1e5, 1e3), labels = c("10M", "100k", "1k")) +
+  theme(strip.text = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank()) +
+  labs(subtitle = "States with the highest production in 2018")
+
+
+p_fast_growth <- beer_states_total %>%
+  ggplot(aes(year,barrels, group = state)) + 
+  geom_line(size = 1.5, colour = "#1b9e77") +
+  facet_wrap(~state, ncol =5) + theme_cowplot() +
+  gghighlight(state %in% fast_growth_states,
+              #use_direct_label = FALSE,
+              #keep_scales = TRUE,
+              label_params = list(direction = "x", xlim = c(2019,2919)),
+              unhighlighted_params = list(size = 0.5, alpha = 0.5)) +
+  theme_cowplot() +
+  scale_x_continuous(breaks = c(2008,2018), limits= c(2008,2025)) +
+  scale_y_log10(breaks = c(1e7, 1e5, 1e3), labels = c("10M", "100k", "1k")) +
+  theme(strip.text = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_blank()) +
+  labs(subtitle = "States with the fastest growth") +
+   ylab("Total Production, Barrels")
+
+p_slow_growth <- beer_states_total %>%
+  ggplot(aes(year,barrels, group = state)) + 
+  geom_line(size = 1.5, colour = "#7570b3") +
+  facet_wrap(~state, ncol =5) + theme_cowplot() +
+  gghighlight(state %in% slow_growth_states,
+              #use_direct_label = FALSE,
+              #keep_scales = TRUE,
+              label_params = list(direction = "x", xlim = c(2019,2919)),
+              unhighlighted_params = list(size = 0.5, alpha = 0.5)) +
+  theme_cowplot() +
+  scale_x_continuous(breaks = c(2008,2018), limits= c(2008,2025)) +
+  scale_y_log10(breaks = c(1e7, 1e5, 1e3), labels = c("10M", "100k", "1k")) +
+  theme(strip.text = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank()) +
+  labs(subtitle = "States with the slowest growth") +
+  xlab("Year")
+
+plot_total <- p_high_prod / p_fast_growth / p_slow_growth
+
+```
+
+# On Premises production
+
+Perform a linear regression on on premises production to find high and low growth rate states from the slope
+
+```{r}
+
+beer_growth_op <- beer_states %>%
+  filter(type == "On Premises") %>%
+  filter(state != "total") %>%
+  filter(barrels >= 500) %>%
+  #mutate(barrels = replace_na(barrels, 0)) %>%
+  group_by(state) %>%
+  mutate(barrels_norm = barrels/max(barrels)) %>%
+  group_nest(state) %>%
+  mutate(model = map(data, ~lm(barrels_norm~year, data = .x)),
+         tidy = map(model, tidy)) %>%
+  unnest(tidy) %>%
+  filter(term == "year") %>%
+  select(state, estimate) %>%
+  rename(slope = estimate)
+
+fast_op_growth_states <- beer_growth_op %>% top_n(5, slope) %>% pull(state)
+
+slow_op_growth_states <- beer_growth_op %>% top_n(-5, slope) %>% pull(state)
+
+high_op_prod_states <- beer_states %>%
+  filter(type == "On Premises") %>%
+  filter(year == 2018) %>%
+  filter(state != "total") %>%
+  ungroup() %>%
+  top_n(5, barrels) %>% 
+  pull(state)
+
+slow_op_growth_states
+fast_op_growth_states
+high_op_prod_states
+
+
+```
+
+
+Plot the on premises production
+
+```{r, fig.height=7, fig.width=7}
+
+
+
+p_high_prod_op <- beer_states %>%
+  filter(type == "On Premises") %>%
+  filter(state != "total") %>%
+    filter(barrels >= 500) %>%
+  ggplot(aes(year,barrels, group = state)) + 
+  geom_line(size = 1.5, colour = "#d95f02") +
+  facet_wrap(~state, ncol =5) + theme_cowplot() +
+  gghighlight(state %in% high_op_prod_states,
+              #use_direct_label = FALSE,
+              #keep_scales = TRUE,
+              label_params = list(direction = "x", xlim = c(2019,2919)),
+              unhighlighted_params = list(size = 0.5, alpha = 0.5)) +
+  theme_cowplot() +
+  scale_x_continuous(breaks = seq(2008,2018,10), limits= c(2007,2025)) +
+  scale_y_log10(labels = scales::unit_format(unit = "k", scale = 1e-3, accuracy = 1, sep = "")) +
+  theme(strip.text = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank()) +
+  labs(subtitle = "States with the highest production in 2018")
+
+
+p_fast_growth_op <- beer_states %>%
+  filter(type == "On Premises") %>%
+  filter(state != "total") %>%
+    filter(barrels >= 500) %>%
+  ggplot(aes(year,barrels, group = state)) + 
+  geom_line(size = 1.5, colour = "#1b9e77") +
+  facet_wrap(~state, ncol =5) + theme_cowplot() +
+  gghighlight(state %in% fast_op_growth_states,
+              #use_direct_label = FALSE,
+              #keep_scales = TRUE,
+              label_params = list(direction = "x", xlim = c(2019,2919)),
+              unhighlighted_params = list(size = 0.5, alpha = 0.5)) +
+  theme_cowplot() +
+  scale_x_continuous(breaks = seq(2008,2018,10), limits= c(2007,2026)) +
+  scale_y_log10(labels = scales::unit_format(unit = "k", scale = 1e-3, accuracy = 1, sep = "")) +
+  theme(strip.text = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_blank()) +
+  labs(subtitle = "States with the fastest growth") +
+   ylab("On Premises Consumption, Barrels")
+
+p_slow_growth_op <- beer_states %>%
+  filter(type == "On Premises") %>%
+  filter(state != "total") %>%
+    filter(barrels >= 500) %>%
+  ggplot(aes(year,barrels, group = state)) + 
+  geom_line(size = 1.5, colour = "#7570b3") +
+  facet_wrap(~state, ncol =5) + theme_cowplot() +
+  gghighlight(state %in% slow_op_growth_states,
+              #use_direct_label = FALSE,
+              #keep_scales = TRUE,
+              label_params = list(direction = "x", xlim = c(2019,2919)),
+              unhighlighted_params = list(size = 0.5, alpha = 0.5)) +
+  theme_cowplot() +
+  scale_x_continuous(breaks = seq(2008,2018,10), limits= c(2007,2026)) +
+  scale_y_log10(labels = scales::unit_format(unit = "k", scale = 1e-3, accuracy = 1, sep = "")) +
+  theme(strip.text = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank()) +
+  labs(subtitle = "States with the slowest growth") +
+  xlab("Year")
+
+plot_op <- p_high_prod_op / p_fast_growth_op / p_slow_growth_op
+
+```
+
+## Combine the plots
+
+```{r, fig.height=7, fig.width=14}
+(plot_total | plot_op) + 
+  plot_annotation(title = "Total beer production has slowed, while production for consumption on the premises has soared, particuarly since 2013", caption = "Data source: Alcohol and Tobacco Tax and Trade Bureau (TTB) via @brewersstats\n\n@adamjtaylor #tidytuesday 2020-03-31")
+  
+```
+
+
