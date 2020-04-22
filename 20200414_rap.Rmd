@@ -1,0 +1,158 @@
+---
+title: "2020-04-14 Rap"
+output: html_notebook
+---
+
+# Get data
+
+```{r}
+tuesdata <- tidytuesdayR::tt_load(2020, week = 16)
+
+
+polls <- tuesdata$polls
+rankings <- tuesdata$rankings
+```
+
+# Explote
+```{r fig.height=6, fig.width=8}
+remotes::install_github("wilkelab/ggtext")
+library(ggtext)
+
+polls %>% distinct(critic_name, critic_country) %>% group_by(critic_country == "US") %>% tally()
+
+
+rankings %>% ggplot(aes(year, points, colour = artist)) + 
+  geom_jitter() + 
+  theme_cowplot() +
+  theme(legend.position = "none")
+
+rankings %>% group_by(year) %>%
+  top_n(-1,ID) %>%
+  arrange(year) %>%
+  select(-n) %>%
+  pivot_longer(starts_with("n"), names_to = "nth_fave", values_to = "count") %>%
+  arrange(desc(count)) %>%
+  ggplot(aes(year, nth_fave, fill = count)) + geom_raster() + scale_fill_viridis_c() + theme_void() +
+  coord_equal()
+
+
+polls %>% mutate(us_critic = critic_country == "US") %>% 
+  group_by(title, artist, year, rank, us_critic) %>%
+  tally() %>%
+  ungroup() %>%
+  mutate(rank = paste0("n", rank)) %>%
+  arrange(rank) %>%
+  pivot_wider(names_from = rank, values_from = n, values_fill = list(n = 0)) %>%
+  mutate(n = n1+n2+n3+n4+n5,
+         points = (10*n1) + (8*n2) +(6*n3) + (4*n4) + (2*n5)) %>%
+  arrange(desc(points)) %>%
+  group_by(us_critic) %>% 
+  mutate(rank = 1:n()) %>%
+  ungroup() %>%
+  select(title, artist,year, us_critic, rank) %>%
+  pivot_wider(names_from = "us_critic", values_from = "rank") %>%
+  left_join(rankings) %>%
+  ggplot() +
+  geom_segment(aes(x = "US", xend = "Rest of World", y = `TRUE`, yend = `FALSE`), lineend = "round", size = 1) +
+  scale_y_reverse() +
+  coord_fixed(ratio = 0.01)
+  
+poll_differences <- polls %>% mutate(us_critic = critic_country == "US") %>% 
+  group_by(title, artist, year, rank, us_critic) %>%
+  tally() %>%
+  ungroup() %>%
+  mutate(rank = paste0("n", rank)) %>%
+  arrange(rank) %>%
+  pivot_wider(names_from = rank, values_from = n, values_fill = list(n = 0)) %>%
+  mutate(n = n1+n2+n3+n4+n5,
+         points = (10*n1) + (8*n2) +(6*n3) + (4*n4) + (2*n5)) %>%
+  group_by(us_critic) %>% 
+  arrange(
+    desc(points), 
+    desc(n),
+    desc(n1), 
+    desc(n2), 
+    desc(n3), 
+    desc(n4), 
+    desc(n5)
+  ) %>% 
+  mutate(rank = 1:n()) %>%
+  ungroup() %>%
+  select(title, artist,year, us_critic, rank) %>%
+  mutate(rank = as.numeric(rank)) %>%
+  pivot_wider(names_from = "us_critic", values_from = "rank", values_fill = list(rank = Inf)) %>%
+  left_join(rankings) %>%
+  filter(ID <= 25) %>%
+  mutate(delta = `TRUE`-`FALSE`) %>%
+  mutate(title_artist = paste0(title, ", ", artist, " (", year, ")")) %>%
+    mutate(title_artist = str_replace_all(title_artist, "’", "'")) %>%
+  mutate(title_artist = fct_reorder(title_artist, desc(ID))) %>%
+  na.omit()
+
+
+
+poll_differences %>% ggplot() +
+  geom_vline(xintercept = Inf, colour = "grey90", size = 9) +
+  geom_segment(aes(x = `TRUE`, xend = `FALSE`, y = title_artist, yend = title_artist)) +
+  geom_point(aes(x = `TRUE`, y = title_artist, colour = "Critics from USA (n = 73)"),size = 3) +
+  geom_point(aes(x = `FALSE`, y = title_artist, colour = "Critics from ROW (n = 34)"),size = 3) + 
+    geom_point(aes(x = ID, y = title_artist), colour = "black", shape = "|", size = 3) +
+  theme_cowplot() +
+  scale_x_reverse(breaks = c(1,25,50,75,100, 120)) +
+  scale_y_discrete(position = "right") +
+  scale_colour_manual(values = c("#d8b365", "#5ab4ac"), ) +
+  xlab("Rank") +
+  theme(axis.title.y = element_blank(),
+        axis.line.y = element_blank(),
+        axis.text.y = element_markdown(size = 9, hjust = 0, colour = "grey20"),
+        legend.position = c(0.1,0.95),
+        legend.text = element_markdown(size = 10),
+        legend.title = element_blank(),
+        
+        axis.text.x = element_markdown(size = 10),
+        axis.title.x = element_markdown(size = 10),
+        title  = element_text(size = 11),
+        plot.caption = element_text(hjust = 0)) +
+  guides(col = guide_legend(nrow = 2, 
+                            title = "", 
+                            reverse = TRUE, 
+                            title.position = "top",
+                            label.position = "left",
+                            label.hjust = 0))+
+  labs(title = "Different tastes in rap", 
+       subtitle = "Critics from around the world find consensus in many highly ranked songs.\nHowever, in the top 25 there are different tastes between critics based in\nthe USA and those from the rest-of-the-world (ROW).",
+       caption = "Bar represents global rank | Data source: BBC Music & @sjockers | @adamjtaylor for #tidytuesday 2020-04-14") +
+  annotate("text", x = Inf, y = 20, label = "Unrated song", angle = 90, vjust = 1, size = 4, colour = "grey40")
+
+poll_differences %>% ggplot(aes(ID, delta)) + geom_point()
+
+d8b365
+5ab4ac
+```
+
+
+
+# Plot with emoji
+
+```{r}
+devtools::install_github("hadley/emo")
+emo::ji("european_union")
+
+
+poll_differences %>% ggplot() +
+  geom_segment(aes(x = `TRUE`, xend = `FALSE`, y = title, yend = title)) +
+  geom_text(aes(x = ID, y = title), label = emoji("earth_africa"), colour = "grey") +
+  geom_point(aes(x = `TRUE`, y = title), colour = "green") +
+  geom_point(aes(x = `FALSE`, y = title), colour = "red") + theme_cowplot() +
+  scale_x_reverse(breaks = c(1,25,50,100,126)) +
+  scale_y_discrete(position = "right") +
+  xlab("Rank") +
+  theme(axis.title.y = element_blank(),
+        axis.line.y = element_blank())
+
+polls %>% mutate(us_critic = critic_country == "US") %>% 
+  group_by(us_critic) %>%
+  tally() 
+```
+
+

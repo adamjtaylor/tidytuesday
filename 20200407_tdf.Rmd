@@ -1,0 +1,128 @@
+---
+title: "2020-04-07 Tour de France"
+output: html_notebook
+---
+
+Import the data
+
+```{r}
+library(tidyverse)
+library(cowplot)
+library(hereR)
+set_key("d1etYXaNDU7KAmK9n_xJsIFpBKyMDKI72DnN5RH2hi8")
+
+#tdf_winners <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-04-07/tdf_winners.csv')
+
+tuesdata <- tidytuesdayR::tt_load('2020-04-07')
+
+
+```
+
+```{r}
+tdf_winners <- tuesdata$tdf_winners
+
+
+tdf_winners %>%
+  filter(!is.na(time_overall)) %>%
+  mutate(ave_speed = distance/time_overall) %>%
+  ggplot(aes(edition, ave_speed, colour = nationality, group = 1)) + geom_point() + theme(legend.position = "none") +
+  scale_x_log10() + scale_y_log10()
+```
+
+```{r}
+stage_data <- tuesdata$stage_data
+
+tdf_stages <- tuesdata$tdf_stages
+tdf_stages %>% 
+  mutate(year = lubridate::year(Date)) %>%
+  group_by(year) %>% 
+  mutate(sum_dist = cumsum(Distance),
+         stage_count = 1:n(),
+         start_date = min(Date),
+         time_from_start = Date-start_date) %>%
+  ggplot(aes(time_from_start, sum_dist, colour = Type, group = year)) + geom_line() + theme_cowplot() + facet_wrap(~year)
+
+tdf_stages %>% ggplot(aes(Distance)) + geom_histogram() + facet_wrap(~Type, scales = "free_y")
+```
+
+# Map
+```{r}
+tdf_stages_geocoded2019 <- tdf_stages %>%
+    mutate(year = lubridate::year(Date)) %>%
+filter(year == 2017) %>%
+  mutate(origin_data = map(Origin, geocode),
+         destination_data = map(Destination, geocode),
+         origin_coords = map(origin_data, sf::st_coordinates),
+         destination_coords = map(destination_data, sf::st_coordinates),
+         origin_lat = map_dbl(origin_coords, ~.x[1]),
+         origin_long = map_dbl(origin_coords, ~.x[2]),
+         destination_lat = map_dbl(destination_coords, ~.x[1]),
+         destination_long = map_dbl(destination_coords, ~.x[2])) %>%
+  select(-origin_data, -origin_coords, -destination_data, -destination_coords)
+
+
+
+  
+
+tdf_stages_coded %>% ggplot() +
+  geom_segment(aes(x = origin_long, xend = destination_long,
+                   y - origin_lat, yend - destination_lat))
+```
+
+```{r}
+stage_data %>% mutate(Stage = str_remove(stage_results_id, "stage-")) %>% 
+  left_join(tdf_stages %>% mutate(year = lubridate::year(Date)))
+
+tdf_stages
+
+tdf_stages %>% distinct(Stage)
+
+stage_data %>% head()
+
+tdf_winners
+
+stage_data %>% head() %>% mutate(elapsed = lubridate::period_to_seconds(elapsed))
+
+stage_data %>% filter(year == 2014) %>% 
+  
+  select(rider, stage_results_id, rank, year) %>%
+  mutate(rank = parse_number(rank, na = c("NQ", "DNF", "DSQ", "OTL", "DF"))) %>%
+  mutate(rank = ifelse(rank >= 250, NA, rank)) %>%
+  ggplot(aes(rider, stage_results_id, fill = rank)) +
+  geom_raster() + scale_fill_viridis_c(direction = -1, option = "magma") + theme_void() +
+  facet_wrap(~year) + coord_equal()
+  
+
+tdf_winners %>% filter(edition == 101)
+stage_data %>% filter(year == 2014) %>% filter(rank == 1)
+
+tdf_winners %>% mutate(year = lubridate::year(start_date)) %>% left_join(stage_data) %>%
+  filter(year == 2014 &) %>%
+  ggplot(aes(stage, year, rank))
+
+route_to_victory <- tdf_winners %>% 
+  extract(winner_name, c("first_name", "last_name"), "([^ ]+) (.*)", remove = FALSE) %>%
+  rename(winner_age = age) %>%
+  left_join(
+    stage_data %>% 
+      extract(rider, c("last_name", "first_name"), "(.*) ([^ ]+)", remove = FALSE),
+    by = c("edition", "first_name", "last_name")
+  ) %>%
+  #filter(year >= 2000) %>%
+  mutate(stage_results_id = str_remove(stage_results_id,"stage-"),
+         stage_results_id = parse_integer(stage_results_id),
+         rank = parse_integer(rank))
+  
+route_to_victory %>% ggplot(aes(stage_results_id,rank, colour = edition, group = edition)) + geom_line() + scale_y_reverse()
+
+route_to_victory %>% ggplot(aes(stage_results_id, year, fill = rank)) + geom_raster() +
+  scale_fill_viridis_c(direction = -1, option = "cividis") + theme_void()
+
+
+route_to_victory
+  
+tdf_winners %>% mutate(bmi = 703*weight/((100*height)^2))
+  ]ggplot(aes(edition, weight)) + geom_point()
+
+```
+

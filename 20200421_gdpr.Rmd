@@ -1,0 +1,264 @@
+---
+title: "2020-04-21 GDPR"
+output: html_notebook
+---
+
+# Libraries
+```{r}
+library(tidyverse)
+library(cowplot)
+```
+
+# Load and tidy data
+
+```{r}
+
+gdpr_violations <- readr::read_tsv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-04-21/gdpr_violations.tsv') %>%
+  # Make some edits to fit with the country names in map_data
+   rename(region = name) %>%
+  mutate(region = case_when(
+    region == "United Kingdom" ~ "UK",
+    region == "Czech Republic Republic" ~ "Czech Rep.",
+    TRUE ~ region))
+
+gdpr_text <- readr::read_tsv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-04-21/gdpr_text.tsv')
+```
+
+Which articles are violated
+
+```{r}
+
+articles_violated <- gdpr_violations %>% 
+  mutate(id = 1:n()) %>%
+  separate_rows(article_violated, sep = "\\|", convert = T) %>%
+  mutate(article_num = str_extract(article_violated, "Art. (\\d+)"),
+         article_num = replace_na(article_num, "Other")) %>%
+  count(article_num, region) %>%
+  group_by(article_num) %>%
+  mutate(total = sum(n)) %>%
+  ungroup() %>%
+  mutate(article_num = ifelse(total <5, "Other", article_num))
+
+selected_regions <- articles_violated %>% 
+  group_by(region) %>% 
+  summarise(n = sum(n)) %>%
+  top_n(4, n) %>%
+  pull(region)
+
+
+p_articles <- articles_violated %>%
+  mutate(region = ifelse(region %in% selected_regions, region, NA),
+         article_num = fct_reorder(article_num, total)) %>%
+  ggplot(aes(n, article_num)) +
+  geom_col(aes(fill = region)) +
+  scale_x_continuous(expand = expansion(add = c(0,10))) +
+  scale_fill_viridis_d(option = "viridis", na.value = "grey60", name = "Country",
+                       labels = c(selected_regions, "Other")) +
+  theme_cowplot() +
+  labs(y = "Article violated", x = "Number of violations",
+       title = "Articles 5, 6 & 32 of GDPR have the\nhighest number of upheld violations",
+       caption = "@adamjtaylor. #tidytuesday") +
+  theme(legend.position = c(0.7,0.3)) +
+  coord_fixed(ratio = 7)
+  
+  
+
+```
+
+
+Setup map data of eu countries
+
+```{r}
+europeanUnion <- c("Austria","Belgium","Bulgaria","Croatia","Cyprus",
+                   "Czech Rep.","Denmark","Estonia","Finland","France",
+                   "Germany","Greece","Hungary","Ireland","Italy","Latvia",
+                   "Lithuania","Luxembourg","Malta","Netherlands","Poland",
+                   "Portugal","Romania","Slovakia","Slovenia","Spain",
+                   "Sweden","UK")
+
+europe_map <- map_data("world", region = europeanUnion)
+
+```
+
+
+Map number of violations
+
+```{r}
+
+p_map <- gdpr_violations %>%
+  group_by(region) %>%
+  tally() %>%
+  full_join(europe_map, by = "region") %>%
+  mutate(n = replace_na(n, 0)) %>%
+  ggplot(aes(x = long, y = lat)) +
+  geom_polygon(aes(group = group, fill = n), colour = "white", size = 0.1)+
+  scale_fill_viridis_c(option = "viridis",limits = c(0,NA), name = "Number of\nviolations\nper country")+
+  theme_void() +
+  coord_map() +
+  labs(title = "Spain has issued the most GDPR violations")
+
+
+
+```
+
+Average fine levied
+```{r}
+gdpr_violations %>% 
+  group_by(region) %>%
+  summarise(total_fines = median(price)/1e3) %>%
+  full_join(europe_map, by = "region") %>%
+  ggplot(aes(x = long, y = lat)) +
+  geom_polygon(aes(group = group, fill = total_fines))+
+  scale_fill_viridis_c(name = "Median fine levied\nlog10 scale\n(€, thousands)", 
+                       trans  = "log10")+
+  theme_void() +
+  coord_map() +
+  ggtitle("The Netherlands and France have the highest median fine price")
+
+gdpr_violations %>% 
+  ggplot(aes(article_violated, price)) + geom_boxplot() + scale_y_log10()
+
+p_histogram <- gdpr_violations %>%
+  ggplot(aes(price)) +
+    geom_vline(xintercept = c(1000, 10000, 100000, 1000000, 10000000)) +
+  geom_histogram(bins = 100, fill = viridis::viridis(3)[2]) + 
+  scale_x_log10(breaks = c(1000, 10000, 100000 ,1000000, 10000000), 
+                labels = c("€1K", "€10K", "€100K","€1M", "€10M")) + 
+  theme_void() +
+  theme(axis.text.x = element_text(),
+        axis.text.y = element_text()) +
+  labs(title = "Fines show a somewhat log-normal distribution,\nwith a median of around €10K")
+
+gdpr_violations %>% count(price, sort =  TRUE)
+
+gdpr_violations %>% summarise_at("price", median)
+
+```
+
+Biggest single fines
+
+```{r}
+gdpr_violations %>% 
+  top_n(5, price) %>% 
+  select(controller, price, article_violated, type)
+  
+  mutate(controller = fct_reorder(controller, price)) %>%
+  ggplot(aes(price, controller)) +
+  geom_col()
+```
+
+# TIdytext
+
+```{r}
+library(tidytext)
+
+book_words <- janeaustenr::austen_books() %>%
+  unnest_tokens(word, text) %>%
+  count(book, word, sort = TRUE)
+
+  bind_tf_idf(word, book, n)
+
+
+gdpr_violations %>% 
+  arrange(price) %>%
+  mutate(quartile = ntile(price,4)) %>%
+  select(quartile, id, summary) %>%
+  unnest_tokens(word, summary, token = "ngrams", n = 2) %>%
+  separate(word, c("word1", "word2"), sep = " ", remove = FALSE) %>%
+  count(quartile, word, sort = TRUE) %>%
+  bind_tf_idf(word, quartile, n) %>%
+  group_by(quartile) %>%
+  top_n(5, tf_idf) %>%
+  mutate(word = fct_reorder(word, n)) %>%
+  ggplot(aes(n, word)) +
+  geom_col() +
+  facet_wrap(~quartile, scales = "free_y")
+
+```
+
+```{r}
+
+stopwords <- get_stopwords() %>% pull(word)
+gdpr_text %>%
+  select(article,gdpr_text) %>%
+  filter(article %in% c(5,6,32)) %>%
+  unnest_tokens(word, gdpr_text, token = "ngrams", n = 1) %>%
+  separate(word, c("word1", "word2"), sep = " ", remove = FALSE) %>%
+  filter(!word1 %in% stopwords,
+         !word2 %in% stopwords) %>% 
+  count(article, word, sort = TRUE) %>%
+  bind_tf_idf(word, article, n) %>%
+  group_by(article) %>%
+  top_n(10, tf_idf) %>%
+  ggplot(aes(tf_idf, word)) +
+  geom_col() +
+  facet_wrap(~article, scales = "free_y")
+
+p_wordcloud <- gdpr_violations %>%
+  select(id, summary) %>%
+  unnest_tokens(word, summary, token = "ngrams", n = 2) %>%
+  separate(word, c("word1", "word2"), sep = " ", remove = FALSE) %>%
+  filter(!word1 %in% stopwords,
+         !word2 %in% stopwords) %>% 
+  count(id, word, sort = TRUE) %>%
+  filter(!grepl("\\d", word)) %>%
+  group_by(word) %>%
+  summarise(n_tot = sum(n), n_in = sum(n != 0)) %>%
+  mutate(prop = n_in/250) %>%
+  top_n(50, prop) %>%
+  arrange(desc(prop)) %>%
+  ggplot(aes(label = word, size = prop)) +
+  geom_text_wordcloud(area_corr = TRUE) +
+  scale_size_area(max_size = 24) +
+  theme_void() +
+  labs(title = "Bigrams mentioned in GDPR violation summarys", subtitle = "Sized by proportion of cases mentioned in")
+
+p_wordcloud
+
+```
+
+# Combine
+
+```{r}
+p_articles + p_map + p_histogram + p_wordcloud
+
+plot_grid(p_articles, p_map, p_histogram, p_wordcloud, align = "none")
+```
+
+#Sentiment analysis
+
+Null hypothesis, sentiment is related to the fine
+
+```{r}
+
+sentiments <- get_sentiments("afinn")
+
+gdpr_violations %>%
+  select(id, price, summary) %>%
+  unnest_tokens(word, summary) %>%
+  filter(!word %in% stopwords) %>% 
+  count(id, price, word, sort = TRUE) %>%
+  filter(!grepl("\\d", word)) %>%
+  inner_join(sentiments) %>%
+  group_by(id, price) %>%
+  summarise(mean_sentiment = mean(value)) %>%
+  ggplot(aes(price, mean_sentiment)) + geom_point() + scale_x_log10(
+  )
+
+gdpr_violations %>%
+  select(id, price, summary) %>%
+  unnest_tokens(word, summary) %>%
+  filter(!word %in% stopwords) %>% 
+  count(id, price, word, sort = TRUE) %>%
+  filter(!grepl("\\d", word)) %>%
+  inner_join(sentiments) %>%
+  group_by(id, price) %>%
+  summarise(mean_sentiment = mean(value)) %>%
+  ungroup() %>%
+  top_n(-1, mean_sentiment) %>%
+  left_join(gdpr_violations) %>%
+  pull(summary)
+```
+
+# predict article from summary?
+

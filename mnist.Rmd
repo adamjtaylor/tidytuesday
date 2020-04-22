@@ -1,0 +1,192 @@
+---
+title: "Multiple `geom_raster()` with different fill scales with `purrr` and `patchwork`"
+output: html_notebook
+---
+
+It's often useful to show small multiples of a `geom_raster()`. With other `geom_*`. While this can be done with `facet_wrap()` or `facet_grid()`, we canot set `scales = "free"` for the fill. If we need to have multiple fill scales we need another approach: Enter `purrr` to map from a nested tibbles of data to a list of plots that can be arranged with patcheork. Here is a worked example using images of handwritten digits from the MNIST dataset
+
+
+### Load required libraries
+
+We'll get the mnist data from the `snedata` package, so install that if needed. We'll use the `tidyverse` packages along with `patchwork` for stitching the plots together and `janitor` for cleaning up some colnames.
+
+```{r warning=FALSE}
+
+library(tidyverse)
+#remotes::install_github("jlmelville/snedata")
+library(snedata)
+library(patchwork)
+library(janitor)
+library(scales)
+
+```
+
+### Read and munge data
+
+Download `mnist from snedata`, select 1 image from each of the labels (0 to 9), and put in a long format with x and y coordinates for plotting.
+
+```{r}
+
+# Download mnist
+mnist <- snedata::download_mnist()
+
+# Get coordinates for mnist pixels - there are 784 pixels in a 28x28 image
+mnist_coords <- matrix(paste0("px", c(1:784)), nrow = 28, ncol = 28) %>%
+  as_tibble() %>%
+  mutate(x = 1:n()) %>%
+  pivot_longer(starts_with("V"), names_to = "y", values_to = "pixel") %>%
+  select(pixel, x, y) %>%
+  mutate(y = parse_number(y) %>% as.integer()) %>%
+  arrange(y,x)
+
+head(mnist_coords)
+
+# Select 1 image per label and munge into a tidy (long) format with coordinates
+mnist_tidy <- mnist %>% 
+  clean_names() %>%
+  group_by(label) %>%
+  sample_n(1) %>% 
+  ungroup() %>%
+  mutate(id = 1:n()) %>%
+  pivot_longer(starts_with("px"), names_to = "pixel", values_to = "intensity") %>%
+  left_join(mnist_coords, by = "pixel")
+
+head(mnist_tidy)
+
+```
+
+
+### Faceting
+
+The obvious approach to plot these 10 representative images would be to use `facet_wrap()`. This works well when all images have the same fill range and distribution, here between 0 and 255.
+
+```{r}
+
+mnist_tidy %>%
+  ggplot(aes(x, y, fill = intensity)) +
+  geom_raster() +
+  scale_y_reverse() +
+  coord_equal() +
+  scale_fill_viridis_c() +
+  theme_void() +
+  facet_wrap(~label, ncol = 5)
+
+```
+
+### But what if our data isn't all on the same intensity scale?
+
+Lets simulate this by scaling the intensity - The image of zero is now scaled between 0 and 255, and the image of nine is scaled beteween 0 and 2550. When we plot this with facet_wrap the lower numbers, with lower intensities are more difficult to see. 
+
+```{r}
+
+mnist_scaled <- mnist_tidy %>% mutate(intensity = intensity * as.numeric(label))
+
+mnist_scaled %>%
+  ggplot(aes(x, y, fill = intensity)) +
+  geom_raster() +
+  scale_y_reverse() +
+  coord_equal() +
+  scale_fill_viridis_c() +
+  theme_void() +
+  facet_wrap(~label, ncol = 5)
+
+```
+
+### Saturate the intensity data
+
+We could adjust `scale_fill` to saturate high intensity pixels. While this allows us to see the low intensity digits more clearly, it blows out detail in the higher intensity digits.
+
+```{r}
+
+mnist_scaled %>%
+  ggplot(aes(x, y, fill = intensity)) +
+  geom_raster() +
+  scale_y_reverse() +
+  coord_equal() +
+  scale_fill_viridis_c(values = c(0, 0.2),
+                       na.value = viridis::viridis(2)[2]) +
+  theme_void() +
+  facet_wrap(~label, ncol = 5)
+
+```
+
+### Rescale the data
+
+We could just rescale the data between 0 and 1 within each image, but this looses information about each image's overall intensity
+
+```{r}
+
+mnist_scaled %>% group_by(label, id) %>% 
+  mutate(rescaled = rescale(intensity, c(0,1))) %>%
+  ggplot(aes(x, y, fill = rescaled)) +
+  geom_raster() +
+  scale_y_reverse() +
+  coord_equal() +
+  scale_fill_viridis_c() +
+  theme_void() +
+  facet_wrap(~label, ncol = 5)
+
+```
+
+
+### What about a seperate fill scale per plot using `purrr` and `patchwork`.
+
+In order to have a seperate scale per image we need to plot them seperately. We can do this efficiently by nesting the data, and applying a plotting function with purrr::map. We can then pull a list of plots that can be stitched together with `patchwork`.
+
+
+```{r}
+
+# Plotting function
+plot_mnist <- function(data, label){
+  data %>%
+    ggplot(aes(x, y, fill = intensity)) +
+    geom_raster() +                                               # set the geom
+    scale_y_reverse() +                                           # invert the y axis
+    coord_equal() +                                               # set aspect ratio of each pixel
+    scale_fill_viridis_c(breaks = scales::pretty_breaks(n = 3)) + # set scale viridis and reduce break number
+    theme_void() +                                                # set the theme
+    labs(subtitle = label) +                                      # add label as a subtitle
+    theme(legend.title = element_blank(),                         # remove legend title
+          legend.key.width = unit(8,"pt"),                        # make scale narrower
+          legend.key.height = unit(10, "pt"),                     # make scale shorter
+          legend.margin = margin(0,10,0,-5, unit = "pt"))         # push scale sligtly closer to the plot
+}
+
+# Map and stitch the plots
+mnist_scaled %>%
+  group_nest(label, id) %>%                                       # nest the data
+  mutate(plot = map2(data, label,plot_mnist)) %>%                 # make a plot from the data in each nested tibble
+  pull(plot) %>%                                                  # pull the list of plots
+  wrap_plots(ncol = 5)                                            # stitch these plots together
+
+```
+
+We can extend this by adding variables to the plotting fucntion - here we reverse the scale for odd numbers. For more than 2 variables in the plotting function, you'll need to use `pmap`.
+
+```{r}
+
+plot_mnist_v2 <- plot_mnist <- function(data, label, direction){
+  data %>%
+    ggplot(aes(x, y, fill = intensity)) +
+    geom_raster() +                                               # set the geom
+    scale_y_reverse() +                                           # invert the y axis
+    coord_equal() +                                               # set aspect ratio of each pixel
+    scale_fill_viridis_c(direction = {{direction}},
+                         breaks = scales::pretty_breaks(n = 2)) +
+    theme_void() +                                                # set the theme
+    labs(subtitle = label) +                                      # add label as a subtitle
+    theme(legend.title = element_blank(),                         # remove legend title
+          legend.key.width = unit(8,"pt"),                        # make scale narrower
+          legend.key.height = unit(10, "pt"),                     # make scale shorter
+          legend.margin = margin(0,10,0,-5, unit = "pt"))         # push scale sligtly closer to the plot
+}
+
+mnist_scaled %>%
+  group_nest(label, id) %>%
+  mutate(direction = ifelse(label %in% c(0,2,4,6,8), 1, -1)) %>%
+  mutate(plot = pmap(list(data, label, direction), plot_mnist_v2)) %>%
+  pull(plot) %>%
+  wrap_plots(ncol = 5)
+
+```
+
