@@ -1,0 +1,587 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+I'm going to write this one blind
+
+## Libraries
+```{r}
+library(tidyverse)
+library(lubridate)
+library(cowplot)
+library(survminer)
+```
+
+# Import the data
+
+- import the data and list the contents
+
+```{r}
+tuesdata <- tidytuesdayR::tt_load('2020-04-28')
+
+tuesdata %>% names()
+
+```
+
+THere are 4 tables
+
+lets explore them
+
+Print off the head of each table
+
+```{r}
+tuesdata %>% map(head)
+
+tuesdata %>% map(dim)
+
+grosses <- tuesdata$grosses
+synopses <- tuesdata$synopses
+cpi <- tuesdata$cpi
+pre1985 <- tuesdata$`pre-1985-starts`
+
+
+```
+
+Ah, so this looks to be about Broadway theatre!.
+- Grosses shows weekly information on various shows including their gross, ticket prices and theatre capacity.
+- Synopsis contains text summarising each show
+- CPI contains inflation data so we can convert historic values to todays value
+- pre-1985 starts contains start data - presumably this is for shows that started before we havce the other data
+
+## Ideas
+
+- what were the top shows of each year
+- Has seat capacity gone up
+- How has highest and average ticket price changes - looks like top ticet price changes 
+- Capacity vs average ticket price vs gross sweet spots
+- Forcast correction based on annual fluctuations - more tickets sold over holidays
+
+# Top grossing shows per month
+
+- we need to calc ave cpi per year
+
+```{r}
+cpi_per_year <- cpi %>% mutate(year = year(year_month)) %>%
+  group_by(year) %>%
+  summarise(cpi = max(cpi))
+
+cpi <- cpi %>% mutate(year = year(year_month), month = month(year_month)) %>% mutate(multiplier =max(cpi)/cpi)
+
+
+grosses %>%
+  mutate(year = year(week_ending)) %>%
+  filter(year != 2020) %>%
+  group_by(show,year) %>%
+    summarise(yearly_gross = sum(weekly_gross)) %>%
+  left_join(cpi_per_year) %>%
+  mutate(yearly_gross_today = yearly_gross *cpi) %>%
+  ungroup() %>%
+  ggplot(aes(year, yearly_gross_today/100, group = year)) + 
+  geom_boxplot() +
+  theme_cowplot() +
+  labs(title = "CPI adjusted annual gross for the top perfoming shows has increaced",
+       x= "Year", y= "CPI adjusted annual gross")
+
+
+```
+
+# Can we see a weekly change accross years
+
+```{r}
+grosses_adjusted <- grosses %>%
+  mutate(year = year(week_ending),
+         month = month(week_ending)) %>%
+  left_join(cpi) %>%
+  mutate_at(vars(weekly_gross_overall, weekly_gross:top_ticket_price), ~.x*multiplier)
+
+grosses_adjusted %>% ggplot(aes(week_number, weekly_gross, group = show)) + 
+  geom_line(alpha = 0.1) + 
+  facet_wrap(~year, scales = "free_y") +
+  theme_cowplot() +
+  theme(axis.text.y = element_blank())
+
+grosses_adjusted %>% filter(year == 2020)
+```
+
+Week number corresponds to broadway seasons not year, so we need to change year to season
+
+```{r}
+grosses_adjusted %>% 
+  pivot_longer(cols = weekly_gross:previews, names_to = "metric", values_to = "value") %>%
+  group_by(year_month, metric) %>%
+  summarise(mean = median(value, na.rm = TRUE)) %>%
+  ggplot(aes(year_month, mean)) + geom_point() +
+  facet_wrap(~metric, scales = "free_y")
+
+grosses_adjusted %>%
+  group_by(show,year) %>%
+    summarise(ave_ticket_price = mean(avg_ticket_price)) %>%
+  ggplot(aes(year, ave_ticket_price, group = year)) + 
+  geom_boxplot() +
+  theme_cowplot() +
+  labs(title = "CPI adjusted average ticket price for the top perfoming shows has increaced",
+       x= "Year", y= "CPI adjusted average ticket price")
+
+
+grosses_adjusted %>%
+  group_by(show,year) %>%
+    summarise(ave_ticket_price = mean(avg_ticket_price/100)) %>% arrange(desc(ave_ticket_price))
+
+grosses_adjusted %>% filter(year == 2019) %>% ggplot(aes(avg_ticket_price, pct_capacity)) + geom_point() +
+  scale_x_log10()
+
+grosses_adjusted %>% filter(pct_capacity <= 0.7& year == 2019) %>%
+  group_by(show) %>%
+  summarise(avg_ticket_price = mean(avg_ticket_price), pct_capacity = mean(pct_capacity)) %>%
+  arrange(desc(avg_ticket_price))
+
+cpi %>% ggplot(aes(year_month, cpi)) + geom_point()
+
+```
+
+# show survival analysis
+
+```{r warning=FALSE}
+library(survival)
+
+grosses_adjusted %>% arrange(desc(week_ending))
+
+show_run_length <- grosses_adjusted %>%
+  filter(!show %in% pre1985$show) %>%
+  select(show, theatre, week_ending,previews, performances, pct_capacity) %>%
+  arrange(show,theatre,week_ending) %>%
+  mutate(group = ifelse(week_ending - lag(week_ending) >= weeks(8) | show != lag(show) | theatre != lag(theatre), 1,0),
+         group = replace_na(group,1),
+         group = cumsum(group) + 1) %>%
+  group_by(show, theatre, group) %>%
+  summarise(opening_week = min(week_ending),
+         end_week = max(week_ending),
+         performances = sum(performances) + sum(previews),
+         mean_fill = mean(pct_capacity)
+         ) %>%
+  mutate(closed = end_week != date("2020-03-01")) %>%
+  mutate(length_of_run =  interval(opening_week, end_week) %/% days(1))
+
+show_run_length %>% arrange(desc(length_of_run)) %>% mutate(years = length_of_run/365) %>%
+  ggplot(aes(performances, length_of_run)) + geom_point(shape = ".") + scale_x_log10() + scale_y_log10()
+
+show_run_length %>% arrange(desc(length_of_run)) %>% 
+  mutate(years = length_of_run/12, weeks = years*52, spw = performances/weeks) %>% 
+  ggplot(aes(spw)) + geom_histogram()
+
+show_run_length %>% arrange(desc(length_of_run)) %>% 
+  mutate(years = length_of_run/12, weeks = years*52, spw = performances/weeks) %>% 
+  filter(spw <= 5)
+
+show_survival <- show_run_length %>%
+  survfit(Surv(performances, closed) ~1, data = .) 
+
+show_survival
+plot(show_survival)
+
+survival_tidy <- tibble(performances = show_survival$time, 
+                        prob = show_survival$surv)
+
+survival_tidy %>% ggplot(aes(time, prob)) + geom_line() + scale_x_log10()
+
+show_survival %>% names()
+
+show_run_length %>% filter(performances <= 112)
+
+show_run_length %>% ungroup() %>%distinct(show, group, performances) %>% count(show, sort = TRUE)
+
+show_run_length %>% ggplot(aes(mean_fill)) + geom_histogram()
+
+```
+
+Do shold out shows have longer runs
+
+```{r}
+show_run_length %>% mutate(closed = ifelse(performances >= 1000, FALSE, TRUE),
+                           performances = ifelse(performances >= 1000, 1000, performances)) %>%
+  mutate(sellout = mean_fill >=0.75) %>% 
+survfit(Surv(performances, closed) ~ sellout, data = .) %>% 
+  plot()
+
+plot(show_survival)
+
+
+
+survival_tidy <- tibble(performances = show_survival$time, 
+                        prob = show_survival$surv)
+
+survival_tidy %>% ggplot(aes(time, prob)) + geom_line() + scale_x_log10()
+```
+
+
+How to calculate opening week fill
+
+```{r}
+
+
+grosses_adjusted %>%
+  filter(!show %in% pre1985$show) %>%
+  select(show, theatre, week_ending,previews, performances, pct_capacity) %>%
+  arrange(show,theatre,week_ending) %>%
+  mutate(group = ifelse(week_ending - lag(week_ending) >= weeks(8) | show != lag(show) | theatre != lag(theatre), 1,0),
+         group = replace_na(group,1),
+         group = cumsum(group) + 1) %>%
+  group_by(show, theatre, group) %>%
+  transmute(opening_week = min(week_ending),
+         end_week = max(week_ending),
+         performances = sum(performances) + sum(previews),
+         opening_week_fill = ifelse(week_ending == opening_week, pct_capacity, NA)) %>%
+  na.omit() %>%
+  mutate(closed = ifelse(performances >= 1000, FALSE, TRUE),
+                           performances = ifelse(performances >= 1000, 1000, performances)) %>%
+  mutate(sellout = opening_week_fill >=1) %>% 
+survfit(Surv(performances, closed) ~ sellout, data = .) %>% 
+  plot()
+
+grosses_adjusted %>%
+  filter(!show %in% pre1985$show) %>%
+  arrange(show,theatre,week_ending) %>%
+  mutate(group = ifelse(week_ending - lag(week_ending) >= weeks(8) | show != lag(show) | theatre != lag(theatre), 1,0),
+         group = replace_na(group,1),
+         group = cumsum(group) + 1) %>%
+  group_by(show, theatre, group) %>%
+  transmute(opening_week = min(week_ending),
+         end_week = max(week_ending),
+         performances = sum(performances) + sum(previews),
+         opening_week_fill = ifelse(week_ending == opening_week, pct_capacity, NA),
+         opening_week_gross = ifelse(week_ending == opening_week, weekly_gross, NA),
+         seats_in_theatre = seats_in_theatre) %>%
+  na.omit() %>%
+  mutate(closed = ifelse(performances >= 1000, FALSE, TRUE),
+                           performances = ifelse(performances >= 1000, 1000, performances)) %>%
+  ungroup() %>%
+  mutate(seats_bin = ntile(seats_in_theatre, 5)) %>% 
+survfit(Surv(performances, closed) ~ seats_bin, data = .) %>% 
+  plot()
+```
+
+```{r}
+show_run_data <- grosses_adjusted %>%
+  filter(!show %in% pre1985$show) %>%
+  arrange(show,theatre,week_ending) %>%
+  mutate(group = ifelse(week_ending - lag(week_ending) >= weeks(8) | show != lag(show) | theatre != lag(theatre), 1,0),
+         group = replace_na(group,1),
+         group = cumsum(group) + 1) %>%
+  group_by(show, theatre, group) %>%
+  transmute(opening_week = min(week_ending),
+         end_week = max(week_ending),
+         performances = sum(performances) + sum(previews),
+         week1_fill = ifelse(week_ending == opening_week, pct_capacity, NA),
+         week1_gross = ifelse(week_ending == opening_week, weekly_gross, NA),
+         week1_ave_ticket_price = ifelse(week_ending == opening_week, avg_ticket_price, NA),
+         seats_in_theatre = seats_in_theatre) %>%
+  na.omit() %>%
+  mutate(closed = ifelse(performances >= 500 | end_week == date("2020-03-01"), FALSE, TRUE),
+         performances = ifelse(performances >= 500, 500, performances)) %>%
+  group_by(show) %>%
+  arrange(opening_week) %>%
+  mutate(revival = opening_week > min(opening_week),
+         revival_num = c(1:n())) %>%
+  ungroup()
+
+```
+
+# week1 ticket price
+
+```{r, fig.height=6, fig.width=4}
+subset <- show_run_data %>% 
+  mutate(bin = ntile(week1_ave_ticket_price, 3),
+         group = case_when(bin == 1 ~ "low",
+                           bin == 2 ~ "mid",
+                           bin == 3 ~ "high"))
+
+fit <- survfit(Surv(performances, closed) ~ group, data = subset) 
+
+
+ggsurvplot(fit, subset,
+           conf.int = T,
+           pval = TRUE,
+           fun = "pct",
+           risk.table = TRUE)
+```
+# week 1 capacity
+```{r, fig.height=6, fig.width=4}
+subset <- show_run_data %>% 
+  mutate(bin = ntile(week1_fill, 3),
+         group = case_when(bin == 1 ~ "low",
+                           bin == 2 ~ "mid",
+                           bin == 3 ~ "high"))
+
+fit <- survfit(Surv(performances, closed) ~ group, data = subset) 
+
+
+ggsurvplot(fit, subset,
+           conf.int = T,
+           pval = TRUE,
+           fun = "pct",
+           risk.table = TRUE)
+```
+
+# week1 gross
+
+```{r, fig.height=6, fig.width=6}
+subset <- show_run_data %>% 
+  mutate(bin = ntile(week1_gross, 3),
+          group = case_when(bin == 1 ~ "low",
+                           bin == 2 ~ "mid",
+                           bin == 3 ~ "high"),
+         group = as.factor(group),
+         group = fct_reorder(group, bin)
+         )
+
+fit <- survfit(Surv(performances, closed) ~ group, data = subset) 
+
+
+ggsurvplot(fit, subset,
+           conf.int = T,
+           pval = TRUE,
+           fun = "pct",
+           risk.table = TRUE,
+           legend.title = "Opening week gross",
+           legend.labs = c("Low", "Medium", "High"),
+           surv.median.line = "hv",
+           tables.height = 0.3)
+```
+# theatre_size
+
+```{r, fig.width=6, fig.height=6}
+subset <- show_run_data %>% 
+  mutate(bin = ntile(seats_in_theatre, 2),
+         group = case_when(bin == 1 ~ "low",
+                           #bin == 2 ~ "mid",
+                           bin == 2 ~ "high"),
+         group = as.factor(group),
+         group = fct_reorder(group, bin)
+         )
+
+fit <- survfit(Surv(performances, closed) ~ group + revival, data = subset) 
+
+
+ggsurvplot(fit, subset,
+           conf.int = T,
+           pval = TRUE,
+           fun = "pct",
+           risk.table = TRUE,
+           legend.title = "Size of theatre",
+           #legend.labs = c("Small", "Medium", "Large"),
+           surv.median.line = "hv",
+           tables.height = 0.3)
+
+aareg(Surv(performances, closed) ~ group + revival, data = subset) %>% plot()
+```
+
+# revivals
+
+```{r, fig.height=6, fig.width=6}
+
+
+fit <- survfit(Surv(performances, closed) ~ revival, data = show_run_data) 
+
+
+ggsurvplot(fit, show_run_data,
+           conf.int = T,
+           pval = TRUE,
+           fun = "pct",
+           risk.table = TRUE)
+
+autoplot(fit)
+
+```
+
+# Can we pull something from text analysis
+
+```{r}
+
+synopses %>% 
+  filter(grepl("film|movie",synopsis)) %>%
+  sample_n(5) %>%
+  pull(synopsis)
+
+synopses %>% 
+  filter(grepl("Tony",synopsis)) %>%
+  sample_n(5) %>%
+  pull(synopsis)
+
+
+
+```
+### Do musicals mentioning film or movies have longer runs?
+
+```{r}
+subset <- show_run_data %>% 
+  left_join(synopses) %>%
+  mutate(film = grepl("film|movie",synopsis))
+
+fit <- survfit(Surv(performances, closed) ~ film, data = subset) 
+
+
+ggsurvplot(fit, subset,
+           conf.int = T,
+           pval = TRUE,
+           fun = "pct",
+           risk.table = TRUE,
+           legend.title = "Synopsis mentions film or movie",
+           #legend.labs = c("Small", "Medium", "Large"),
+           surv.median.line = "hv",
+           tables.height = 0.3)
+```
+
+Do movies mentioning Tony survivie longr
+
+```{r}
+subset <- show_run_data %>% 
+  left_join(synopses) %>%
+  mutate(tony = grepl("Tony",synopsis))
+
+fit <- survfit(Surv(performances, closed) ~ tony, data = subset) 
+
+
+ggsurvplot(fit, subset,
+           conf.int = T,
+           pval = TRUE,
+           fun = "pct",
+           risk.table = TRUE,
+           legend.title = "Synopsis mentions Tony",
+           #legend.labs = c("Small", "Medium", "Large"),
+           surv.median.line = "hv",
+           tables.height = 0.3)
+```
+
+
+
+Sentiment analysis?
+
+```{r}
+library(tidytext)
+
+data("stop_words")
+sentiments <- get_sentiments("afinn")
+
+
+show_sentiment <- synopses %>%
+  unnest_tokens(word, synopsis) %>%
+  anti_join(stop_words) %>%
+  inner_join(sentiments) %>% group_by(show) %>%
+  summarise(n = n(),
+            median = median(value, na.rm = TRUE),
+            sd = sd(value, na.rm = TRUE)) %>%
+  arrange(desc(median)) %>%
+  mutate(sentiment = case_when(
+    median >=2 & n > 3 &median-sd > 0~ "happy",
+    median <= -2 & n > 3 & median+sd <0 ~ "sad",
+    TRUE ~ "unknown"
+  ))
+  
+
+show_sentiment %>% top_n(1, median) %>%
+  left_join(synopses) %>%
+  pull(synopsis)
+
+show_sentiment %>% top_n(-1, median) %>%
+  left_join(synopses) %>%
+  pull(synopsis)
+
+show_sentiment %>% ggplot(aes(median)) + geom_histogram()
+
+show_sentiment %>% #filter(sentiment != "unknown") %>%
+  mutate(show = factor(show),
+         show = fct_reorder(show, median)) %>%
+  ggplot(aes(median, show)) +
+  geom_pointrange(aes(xmin = median-sd, xmax = median+sd, colour = sentiment)) +
+  theme(axis.text.y = element_blank())+ theme_void() +
+  geom_vline(xintercept = 0)
+
+show_sentiment
+
+```
+
+Plot surfvial analysis based on this
+
+```{r}
+subset <- show_run_data %>% 
+  left_join(show_sentiment) %>%
+  filter(sentiment != "unknown")
+
+fit <- survfit(Surv(performances, closed) ~ sentiment, data = subset) 
+
+
+ggsurvplot(fit, subset,
+           conf.int = T,
+           pval = TRUE,
+           risk.table = TRUE,
+           legend.title = "Synopsis mentions film or movie",
+           #legend.labs = c("Small", "Medium", "Large"),
+           surv.median.line = "hv",
+           tables.height = 0.3)
+```
+
+What about a differnt sentiment library
+
+```{r}
+nrc_sentimnets <- get_sentiments("nrc")
+
+show_sentiment_nrc <- synopses %>%
+  unnest_tokens(word, synopsis) %>%
+  anti_join(stop_words) %>%
+  inner_join(nrc_sentimnets) %>% 
+  group_by(show) %>%
+  summarise(n = n(),
+            n_pos = sum(sentiment == "positive"),
+            n_neg = sum(sentiment == "negative"),
+            score = (n_pos-n_neg)/(n_pos+n_neg))
+
+show_sentiment_nrc <-synopses %>%
+  unnest_tokens(word, synopsis) %>%
+  anti_join(stop_words) %>%
+  inner_join(nrc_sentimnets) %>% 
+  group_by(show) %>%
+  count(sentiment) %>%
+  filter(!sentiment %in% c("positive", "negative")) %>%
+  top_n(1,n)
+
+show_sentiment_nrc %>% arrange(desc(score))
+```
+```{r, fig.height=8, fig.width=8}
+`
+subset <- show_run_data %>% 
+  left_join(show_sentiment_nrc)
+
+fit <- survfit(Surv(performances, closed) ~ sentiment, data = subset) 
+
+
+ggsurvplot(fit, subset,
+           conf.int = F,
+           pval = TRUE,
+           risk.table = TRUE,
+           legend.title = "Synopsis modal sentiment",
+           #legend.labs = c("Small", "Medium", "Large"),
+           surv.median.line = "hv",
+           tables.height = 0.3)
+```
+
+
+```{r}
+subset <- show_run_data %>% 
+  left_join(show_sentiment_nrc) %>%
+  filter(sentiment %in% c("disgust", "joy", "anticipation"))
+
+fit <- survfit(Surv(performances, closed) ~ sentiment, data = subset) 
+
+
+ggsurvplot(fit, subset,
+           conf.int = T,
+           pval = TRUE,
+           risk.table = TRUE,
+           legend.title = "Synopsis modal sentiment",
+           legend.labs = c("Anticipation", "Disgust", "Joy"),
+           surv.median.line = "hv",
+           tables.height = 0.3)
+```
+```
+

@@ -6,6 +6,10 @@ output: html_notebook
 # Get data
 
 ```{r}
+library(tidyverse)
+library(cowplot)
+library(ggtext)
+
 tuesdata <- tidytuesdayR::tt_load(2020, week = 16)
 
 
@@ -13,49 +17,12 @@ polls <- tuesdata$polls
 rankings <- tuesdata$rankings
 ```
 
-# Explote
+# Prepare the data
+
 ```{r fig.height=6, fig.width=8}
-remotes::install_github("wilkelab/ggtext")
+#remotes::install_github("wilkelab/ggtext")
 library(ggtext)
 
-polls %>% distinct(critic_name, critic_country) %>% group_by(critic_country == "US") %>% tally()
-
-
-rankings %>% ggplot(aes(year, points, colour = artist)) + 
-  geom_jitter() + 
-  theme_cowplot() +
-  theme(legend.position = "none")
-
-rankings %>% group_by(year) %>%
-  top_n(-1,ID) %>%
-  arrange(year) %>%
-  select(-n) %>%
-  pivot_longer(starts_with("n"), names_to = "nth_fave", values_to = "count") %>%
-  arrange(desc(count)) %>%
-  ggplot(aes(year, nth_fave, fill = count)) + geom_raster() + scale_fill_viridis_c() + theme_void() +
-  coord_equal()
-
-
-polls %>% mutate(us_critic = critic_country == "US") %>% 
-  group_by(title, artist, year, rank, us_critic) %>%
-  tally() %>%
-  ungroup() %>%
-  mutate(rank = paste0("n", rank)) %>%
-  arrange(rank) %>%
-  pivot_wider(names_from = rank, values_from = n, values_fill = list(n = 0)) %>%
-  mutate(n = n1+n2+n3+n4+n5,
-         points = (10*n1) + (8*n2) +(6*n3) + (4*n4) + (2*n5)) %>%
-  arrange(desc(points)) %>%
-  group_by(us_critic) %>% 
-  mutate(rank = 1:n()) %>%
-  ungroup() %>%
-  select(title, artist,year, us_critic, rank) %>%
-  pivot_wider(names_from = "us_critic", values_from = "rank") %>%
-  left_join(rankings) %>%
-  ggplot() +
-  geom_segment(aes(x = "US", xend = "Rest of World", y = `TRUE`, yend = `FALSE`), lineend = "round", size = 1) +
-  scale_y_reverse() +
-  coord_fixed(ratio = 0.01)
   
 poll_differences <- polls %>% mutate(us_critic = critic_country == "US") %>% 
   group_by(title, artist, year, rank, us_critic) %>%
@@ -124,35 +91,8 @@ poll_differences %>% ggplot() +
        caption = "Bar represents global rank | Data source: BBC Music & @sjockers | @adamjtaylor for #tidytuesday 2020-04-14") +
   annotate("text", x = Inf, y = 20, label = "Unrated song", angle = 90, vjust = 1, size = 4, colour = "grey40")
 
-poll_differences %>% ggplot(aes(ID, delta)) + geom_point()
 
-d8b365
-5ab4ac
 ```
 
-
-
-# Plot with emoji
-
-```{r}
-devtools::install_github("hadley/emo")
-emo::ji("european_union")
-
-
-poll_differences %>% ggplot() +
-  geom_segment(aes(x = `TRUE`, xend = `FALSE`, y = title, yend = title)) +
-  geom_text(aes(x = ID, y = title), label = emoji("earth_africa"), colour = "grey") +
-  geom_point(aes(x = `TRUE`, y = title), colour = "green") +
-  geom_point(aes(x = `FALSE`, y = title), colour = "red") + theme_cowplot() +
-  scale_x_reverse(breaks = c(1,25,50,100,126)) +
-  scale_y_discrete(position = "right") +
-  xlab("Rank") +
-  theme(axis.title.y = element_blank(),
-        axis.line.y = element_blank())
-
-polls %>% mutate(us_critic = critic_country == "US") %>% 
-  group_by(us_critic) %>%
-  tally() 
-```
 
 
